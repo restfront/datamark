@@ -1,4 +1,4 @@
-module datamark
+module github.com/restfront/datamark
 
 go 1.23.11
 
