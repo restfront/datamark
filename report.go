@@ -1,27 +1,56 @@
 package datamark
 
 type ReportRequest struct {
-	ReportID *string `json:"report_id,omitempty"`
+	UUIDs []string `json:"uuid_list,omitempty"`
 
-	Group  *string       `json:"group,omitempty"`
-	Labels []string      `json:"labels,omitempty"`
-	Params []ReportParam `json:"params,omitempty"`
+	Group  *string     `json:"group,omitempty"`
+	Labels []Label     `json:"labels,omitempty"`
+	Params ReportParam `json:"params,omitempty"`
+}
+
+type Label struct {
+	Label string `json:"label"`
 }
 
 type ReportParam struct {
-	Code  int    `json:"code"`
-	Value string `json:"value"`
+	ManufactureDate          string `json:"manufacture_date"`           // (25) Дата изготовления (производства) товара
+	ItemName                 string `json:"item_name"`                  // (94) Наименование товара
+	MarkMethod               string `json:"mark_method"`                // (95) Способ маркировки (полиграфическая защита)
+	DeclarationRegNumber     string `json:"declaration_reg_number"`     // (96) Регистрационный номер декларации на товары
+	DeclarationReleaseDate   string `json:"declaration_release_date"`   // (97) Дата выпуска товаров по декларации
+	Country                  string `json:"country"`                    // (100) Страна экспорта
+	MarkTarget               string `json:"mark_target"`                // (101) Цель маркировки
+	ContractDate             string `json:"dogovor_date"`               // (102) Основание: дата документа
+	ContractNumber           string `json:"dogovor_nomer"`              // (103) Основание: номер документа
+	MarkReason               string `json:"mark_reason"`                // (104) Причина нанесения СИ
+	DocumentDate             string `json:"document_date"`              // (109) Дата документа, подтверждающего приобретение товара
+	DocumentNumber           string `json:"document_number"`            // (110) Номер документа, подтверждающего приобретение товара
+	TaxPayerNumber           string `json:"org_number"`                 // (111) Номер налогоплательщика
+	SellerName               string `json:"org_name"`                   // (112) Наименование организации-продавца
+	RemarkReason             string `json:"remark_reason"`              // (124) Причина перемаркировки
+	ExportCountryEAEU        string `json:"export_country_eaeu"`        // (126) Страна экспорта (ЕАЭС)
+	DeclarationOrdinalNumber string `json:"declaration_ordinal_number"` // (134) Порядковый номер товара в декларации на товары
+}
+
+type ReportMarkResponse struct {
+	ID   int64  `json:"report_id"`  // ID отчёта
+	UUID string `json:"report_uid"` // UID, уникальный идентификатор отчёта о маркировке (report_type = 1)
+}
+
+type ReportResponseList struct {
+	Reports []ReportResponse `json:"results"`
 }
 
 type ReportResponse struct {
-	UID       string `json:"report_id"`
+	UUID      string `json:"report_id"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 	Type      int    `json:"type"`
-	Group     string `json:"group"`
 
 	Status ReportStatus `json:"status"`
 	Result ReportResult `json:"result"`
+
+	NotFoundUUIDs []string `json:"not_found_uuids"`
 }
 
 type ReportStatus struct {
@@ -30,14 +59,18 @@ type ReportStatus struct {
 }
 
 type ReportResult struct {
-	Labels    ReportLabel `json:"labels"`
-	TypeID    int         `json:"type_id"`
-	ErrorCode int         `json:"error"`
-	Message   string      `json:"message"`
+	Group  string      `json:"group"`
+	GTIN   string      `json:"gtin"`
+	Labels ReportLabel `json:"labels"`
+
+	TypeID    int    `json:"type_id"`
+	ErrorCode int    `json:"error"`
+	Message   string `json:"message"`
 }
 
 type ReportLabel struct {
-	Success int      `json:"success"`
-	Failed  int      `json:"failed"`
-	Details []string `json:"details"`
+	Success      int      `json:"success"`
+	Failed       int      `json:"failed"`
+	Details      []string `json:"details"`
+	FullQuantity int      `json:"all"`
 }

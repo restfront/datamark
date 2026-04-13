@@ -24,14 +24,23 @@ type ErrorResponse struct {
 	ErrorCode int      `json:"error"`
 	Message   string   `json:"message"`
 	Details   []string `json:"details"`
+	Detail    string   `json:"detail"`
 }
 
 // ErrorDescription возвращает описание ошибки из тела ответа.
 func (e *ErrorResponse) ErrorDescription() string {
-	description := e.Message
+	description := ""
+
+	if e.Detail != "" {
+		description += e.Detail
+	}
+
+	if e.Message != "" {
+		description += e.Message
+	}
 
 	if len(e.Details) > 0 {
-		description = fmt.Sprintf("%s, %s", e.Message, strings.Join(e.Details, ", "))
+		description = fmt.Sprintf("%s, %s", description, strings.Join(e.Details, ", "))
 	}
 
 	return description

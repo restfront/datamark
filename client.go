@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -19,15 +20,16 @@ var (
 
 type Client struct {
 	config     *Config
-	token      string
+	token      *accessToken
 	httpClient *resty.Client
 	logger     logger
+	mu         sync.Mutex
 }
 
 type Config struct {
 	BaseURL           string
-	DefaultUsername   string
-	DefaultPassword   string
+	Username          string
+	Password          string
 	RequestTimeoutSec int
 	RetryPolicy       struct {
 		MaxAttempts int
@@ -35,6 +37,11 @@ type Config struct {
 	}
 	DebugMode bool
 	DevMode   bool
+}
+
+type accessToken struct {
+	AccessToken string
+	ExpiresAt   int64
 }
 
 type logger interface {
@@ -59,6 +66,8 @@ func NewClient(config *Config, logger logger) *Client {
 	client := &Client{
 		config: config,
 		logger: logger,
+		token:  nil,
+		mu:     sync.Mutex{},
 	}
 
 	httpClient := resty.New()
@@ -122,7 +131,7 @@ func (c *Client) doRequest(
 	// инициализация запроса
 	req := c.httpClient.R().
 		SetContext(ctx).
-		SetHeader("Token", c.token).
+		SetHeader("Token", c.token.AccessToken).
 		SetResult(result).
 		SetError(errResponse)
 
@@ -179,4 +188,17 @@ func retry(ctx context.Context, delay time.Duration, fn func(context.Context) (b
 			return fmt.Errorf("%w: %w", ErrConnectionTimeout, ctx.Err())
 		}
 	}
+}
+
+// refreshToken обновляет токен
+func (client *Client) refreshToken(ctx context.Context) error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	return client.Auth(ctx)
+}
+
+// isExpired возвращает true если до окончания срока действия токена осталось меньше 5 минут
+func (token *accessToken) isExpired() bool {
+	return time.Until(time.Unix(token.ExpiresAt, 0)) < 5*time.Minute
 }

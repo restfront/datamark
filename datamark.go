@@ -5,22 +5,20 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 )
 
-func (client *Client) Auth(ctx context.Context, request AuthRequest) (*AuthResponse, error) {
+const (
+	timeFormat string = "2006-01-02 15:04:05"
+	batchSize  int    = 100
+)
+
+func (client *Client) Auth(ctx context.Context) error {
 	path := "/auth"
-
-	if request.Username == "" {
-		request.Username = client.config.DefaultUsername
-	}
-
-	if request.Password == "" {
-		request.Password = client.config.DefaultPassword
-	}
 
 	endpoint, err := url.JoinPath(client.config.BaseURL, path)
 	if err != nil {
-		return nil, ErrIncorrectURL
+		return ErrIncorrectURL
 	}
 
 	result := &AuthResponse{}
@@ -32,8 +30,8 @@ func (client *Client) Auth(ctx context.Context, request AuthRequest) (*AuthRespo
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/x-www-form-urlencoded").
 		SetFormData(map[string]string{
-			"username": request.Username,
-			"password": request.Password,
+			"username": client.config.Username,
+			"password": client.config.Password,
 		}).
 		SetResult(result).
 		SetError(errResponse).
@@ -41,22 +39,39 @@ func (client *Client) Auth(ctx context.Context, request AuthRequest) (*AuthRespo
 
 	if err != nil {
 		if isTimeout(err) {
-			return nil, ErrConnectionTimeout
+			return ErrConnectionTimeout
 		}
-		return nil, fmt.Errorf("ошибка при выполнении запроса авторизации: %w", err)
+		return fmt.Errorf("ошибка при выполнении запроса авторизации: %w", err)
 	}
 
 	if response.IsError() {
-		return nil, fmt.Errorf("ошибка при выполнении запроса авторизации: %s", errResponse.ErrorDescription())
+		return fmt.Errorf("ошибка при выполнении запроса авторизации: %s", errResponse.ErrorDescription())
 	}
 
-	client.token = result.Token
+	tokenExpTime, err := time.Parse(timeFormat, result.User.ExpiresIn)
+	if err != nil {
+		return fmt.Errorf("не удалось преобразовать время истечения токена: %w", err)
+	}
 
-	return result, nil
+	token := &accessToken{
+		AccessToken: result.Token,
+		ExpiresAt:   tokenExpTime.Unix(),
+	}
+
+	client.token = token
+
+	return nil
 }
 
 func (client *Client) Logout(ctx context.Context) error {
 	path := "/logout"
+
+	if client.token == nil || client.token.isExpired() {
+		err := client.refreshToken(ctx)
+		if err != nil {
+			return err
+		}
+	}
 
 	_, err := client.doRequest(ctx, http.MethodPost, path, nil, nil, nil)
 	if err != nil {
@@ -69,6 +84,13 @@ func (client *Client) Logout(ctx context.Context) error {
 // CreateItemByGtin добавление товара по GTIN
 func (client *Client) CreateItemByGtin(ctx context.Context, request ItemRequest) (*ItemResponse, error) {
 	path := "/items/addByGtin"
+
+	if client.token == nil || client.token.isExpired() {
+		err := client.refreshToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	client.logger.Debugf("Запрос на добавление товара по GTIN")
 
@@ -86,22 +108,46 @@ func (client *Client) CreateItemByGtin(ctx context.Context, request ItemRequest)
 func (client *Client) GetGTINStatuses(ctx context.Context, request ItemRequest) (GTINStatusesResponse, error) {
 	path := "/items/checkGtin"
 
+	if client.token == nil || client.token.isExpired() {
+		err := client.refreshToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	client.logger.Debugf("Запрос на проверку статусов регистрации GTIN")
 
-	// TODO нужно ли учитывать ограничение в 100 GTIN, в старом коде отправляется список без проверки длины
-
 	result := make(GTINStatusesResponse)
-	_, err := client.doRequest(ctx, http.MethodPost, path, nil, request, result)
-	if err != nil {
-		return result, fmt.Errorf("ошибка при запросе проверки статусов регистрации GTIN: %w", err)
+	for i := 0; i < len(request.GTINList); i += batchSize {
+		end := i + batchSize
+		// если длина списка меньше лимита, то конец списка будет остаток
+		// или если изначально длина была меньше лимита, то конец списка будет длина основного списка
+		if end > len(request.GTINList) {
+			end = len(request.GTINList)
+		}
+
+		req := request.GTINList[i:end]
+
+		_, err := client.doRequest(ctx, http.MethodPost, path, nil, req, &result)
+		if err != nil {
+			return result, fmt.Errorf("ошибка при запросе проверки статусов регистрации GTIN: %w", err)
+		}
 	}
 
 	return result, nil
 }
 
 // FindItem поиск товара
+// В старом коде этот метод ничего не делает с телом ответа, метод НЕ используется
 func (client *Client) FindItem(ctx context.Context, request ItemRequest) (*ItemsResponse, error) {
 	path := "/items/findItems"
+
+	if client.token == nil || client.token.isExpired() {
+		err := client.refreshToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	client.logger.Debugf("Запрос на поиск товара")
 
@@ -112,41 +158,50 @@ func (client *Client) FindItem(ctx context.Context, request ItemRequest) (*Items
 	}
 
 	// NOTE в этом методе в ответе поле gtin_check имеет тип bool.
-	// В старом коде этот метод ничего не делает с телом ответа, он вообще не используется
 
 	return result, nil
 }
 
 // GetOrderByID информация о заказе
-func (client *Client) GetOrderByID(ctx context.Context, request OrderRequest) (*OrderResponse, error) {
-	path := "/v2/orders"
+func (client *Client) GetOrderByID(ctx context.Context, id int64) (*OrderResponse, error) {
+	path := fmt.Sprintf("%s/%d", "/v3/orders/list", id)
+
+	if client.token == nil || client.token.isExpired() {
+		err := client.refreshToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	client.logger.Debugf("Запрос на получение информации о заказе")
 
 	result := &OrderResponse{}
-	_, err := client.doRequest(ctx, http.MethodPost, path, nil, request, result)
+	_, err := client.doRequest(ctx, http.MethodGet, path, nil, nil, result)
 	if err != nil {
-		return result, fmt.Errorf("ошибка при запросе получения информации о заказе: %w", err)
+		return result, fmt.Errorf("ошибка при запросе получения информации о заказе кодов маркировки: %w", err)
 	}
-
-	// NOTE в этом методе в теле ответа поле ID имеет тип int
 
 	return result, nil
 }
 
 // CreateGroupOrders групповой заказ кодов маркировки
-func (client *Client) CreateGroupOrders(ctx context.Context, request OrderRequest) (OrderGroupResponse, error) {
-	path := "/v2/orders/addGroupOrders"
+func (client *Client) CreateGroupOrders(ctx context.Context, request OrderRequest) (*OrderGroupResponse, error) {
+	path := "/v3/orders/addGroupOrders"
+
+	if client.token == nil || client.token.isExpired() {
+		err := client.refreshToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	client.logger.Debugf("Запрос на создание группового заказа кодов маркировки")
 
-	result := make(OrderGroupResponse)
+	result := &OrderGroupResponse{}
 	_, err := client.doRequest(ctx, http.MethodPost, path, nil, request, result)
 	if err != nil {
 		return result, fmt.Errorf("ошибка при запросе создания группового заказа: %w", err)
 	}
-
-	// NOTE в этом методе в теле ответа поле ORDER.ID имеет тип string, либо сделать маленькую отдельную структуру с 2 полями
 
 	return result, nil
 }
@@ -154,6 +209,13 @@ func (client *Client) CreateGroupOrders(ctx context.Context, request OrderReques
 // GetOrdersStatuses Список статусов заказов
 func (client *Client) GetOrdersStatuses(ctx context.Context, request OrderRequest) (*OrdersListResponse, error) {
 	path := "/v2/orders/statusList"
+
+	if client.token == nil || client.token.isExpired() {
+		err := client.refreshToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	client.logger.Debugf("Запрос на получение списка статусов заказов")
 
@@ -163,32 +225,45 @@ func (client *Client) GetOrdersStatuses(ctx context.Context, request OrderReques
 		return result, fmt.Errorf("ошибка при запросе получения списка статусов заказов: %w", err)
 	}
 
-	// NOTE в этом методе в теле ответа поле ORDER.ID имеет тип int
+	return result, nil
+}
+
+// GetLabels Список заказанных кодов
+func (client *Client) GetLabels(ctx context.Context, request LabelRequest) (*LabelResponse, error) {
+	path := "/v3/orders/downloads"
+
+	if client.token == nil || client.token.isExpired() {
+		err := client.refreshToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	client.logger.Debugf("Запрос на получение списка заказанных кодов")
+
+	result := &LabelResponse{}
+	_, err := client.doRequest(ctx, http.MethodPost, path, nil, request, result)
+	if err != nil {
+		return result, fmt.Errorf("ошибка при запросе получения списка заказанных кодов: %w", err)
+	}
 
 	return result, nil
 }
 
-// GetFile скачивание файла
-func (client *Client) GetFile(ctx context.Context, filename string) error {
-	path := fmt.Sprintf("%s%s", "/downloads/", filename)
-
-	client.logger.Debugf("Запрос на получение файла")
-
-	_, err := client.doRequest(ctx, http.MethodGet, path, nil, nil, nil)
-	if err != nil {
-		return fmt.Errorf("ошибка при запросе получения файла: %w", err)
-	}
-
-	return nil
-}
-
 // CreateMarksReport отчёт о маркировке
-func (client *Client) CreateMarksReport(ctx context.Context, request ReportRequest) (*ReportResponse, error) {
-	path := "/v2/reports/addMark"
+func (client *Client) CreateMarksReport(ctx context.Context, request ReportRequest) (*ReportMarkResponse, error) {
+	path := "/v3/reports/addMark"
+
+	if client.token == nil || client.token.isExpired() {
+		err := client.refreshToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	client.logger.Debugf("Запрос на создание отчёта о маркировке")
 
-	result := &ReportResponse{}
+	result := &ReportMarkResponse{}
 	_, err := client.doRequest(ctx, http.MethodPost, path, nil, request, result)
 	if err != nil {
 		return result, fmt.Errorf("ошибка при запросе создания отчёта о маркировке: %w", err)
@@ -198,15 +273,22 @@ func (client *Client) CreateMarksReport(ctx context.Context, request ReportReque
 }
 
 // GetReportStatus статус выполнения отчёта
-func (client *Client) GetReportStatus(ctx context.Context, request ReportRequest) (*ReportResponse, error) {
-	path := "/v2/reports"
+func (client *Client) GetReportStatus(ctx context.Context, request ReportRequest) (*ReportResponseList, error) {
+	path := "/v3/reports"
 
-	client.logger.Debugf("Запрос на получение статуса выполнения отчёта")
+	if client.token == nil || client.token.isExpired() {
+		err := client.refreshToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
-	result := &ReportResponse{}
+	client.logger.Debugf("Запрос на получение статусов выполнения отчёта")
+
+	result := &ReportResponseList{}
 	_, err := client.doRequest(ctx, http.MethodPost, path, nil, request, result)
 	if err != nil {
-		return result, fmt.Errorf("ошибка при запросе получения статуса выполнения отчёта: %w", err)
+		return result, fmt.Errorf("ошибка при запросе получения статусов выполнения отчёта: %w", err)
 	}
 
 	return result, nil

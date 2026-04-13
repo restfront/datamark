@@ -31,7 +31,7 @@ type AgentInfo struct {
 	ID              int    `json:"id"`
 	Name            string `json:"name"`
 	Address         string `json:"address"`
-	UNP             string `json:"unp"` // TODO в order тип int
+	UNP             string `json:"unp"`
 	GLN             string `json:"gln"`
 	Country         string `json:"country"` // Страна регистрации контрагента
 	Email           string `json:"email"`
