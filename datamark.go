@@ -66,17 +66,19 @@ func (client *Client) Auth(ctx context.Context) error {
 func (client *Client) Logout(ctx context.Context) error {
 	path := "/logout"
 
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
 	if client.token == nil || client.token.isExpired() {
-		err := client.refreshToken(ctx)
-		if err != nil {
-			return err
-		}
+		return nil
 	}
 
 	_, err := client.doRequest(ctx, http.MethodPost, path, nil, nil, nil)
 	if err != nil {
 		return fmt.Errorf("ошибка при запросе выхода: %w", err)
 	}
+
+	client.token = nil
 
 	return nil
 }
