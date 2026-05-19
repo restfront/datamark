@@ -38,7 +38,8 @@ type ReportMarkResponse struct {
 }
 
 type ReportResponseList struct {
-	Reports []ReportResponse `json:"results"`
+	Reports       []ReportResponse `json:"results"`
+	NotFoundUUIDs []string         `json:"not_found_uuids"`
 }
 
 type ReportResponse struct {
@@ -49,8 +50,6 @@ type ReportResponse struct {
 
 	Status ReportStatus `json:"status"`
 	Result ReportResult `json:"result"`
-
-	NotFoundUUIDs []string `json:"not_found_uuids"`
 }
 
 type ReportStatus struct {
