@@ -128,7 +128,9 @@ func (client *Client) GetGTINStatuses(ctx context.Context, request ItemRequest) 
 			end = len(request.GTINList)
 		}
 
-		req := request.GTINList[i:end]
+		req := ItemRequest{
+			GTINList: request.GTINList[i:end],
+		}
 
 		_, err := client.doRequest(ctx, http.MethodPost, path, nil, req, &result)
 		if err != nil {
